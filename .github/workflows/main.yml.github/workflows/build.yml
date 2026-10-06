@@ -1,0 +1,60 @@
+name: build
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate project (unpack the source zip if that's what was uploaded)
+        run: |
+          if [ -f Makefile ]; then echo "PROJ=." >> "$GITHUB_ENV"
+          elif [ -f DJScratch-MPC/Makefile ]; then echo "PROJ=DJScratch-MPC" >> "$GITHUB_ENV"
+          elif ls *.zip >/dev/null 2>&1; then
+            unzip -q -o "$(ls *.zip | head -1)" -d src_unzipped
+            dir=$(dirname "$(find src_unzipped -name Makefile | head -1)")
+            [ -n "$dir" ] || { echo "No Makefile inside the zip"; exit 1; }
+            echo "PROJ=$dir" >> "$GITHUB_ENV"
+          else echo "Can't find the DJScratch project (Makefile or source zip)"; exit 1; fi
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq g++-arm-linux-gnueabihf binutils-arm-linux-gnueabihf file zip
+          pip install --quiet pillow
+
+      - name: Offline host test (x86)
+        working-directory: ${{ env.PROJ }}
+        run: |
+          make test
+          make abi32
+
+      - name: Build ARM plugin + package
+        working-directory: ${{ env.PROJ }}
+        run: |
+          chmod +x scripts/*.sh mpc/*.sh
+          READELF=arm-linux-gnueabihf-readelf ./scripts/package.sh
+          ls -la dist
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DJScratch-mpc-armv7
+          path: ${{ env.PROJ }}/dist/*.zip
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: DJ Scratch 1.4.0 (build ${{ github.run_number }})
+          make_latest: true
+          files: |
+            ${{ env.PROJ }}/dist/DJScratch-1.4.0-mpc-armv7.zip
+            ${{ env.PROJ }}/dist/setup.sh
